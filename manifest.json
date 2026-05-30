@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Universal Longshot Pro",
+  "version": "2.0",
+  "description": "Capture any page into a long screenshot without DOM conflicts or black screens.",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
