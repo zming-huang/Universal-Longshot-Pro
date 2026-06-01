@@ -172,45 +172,64 @@ async function restoreStickyAndFixedElements() {
   }
 }
 
-// 大画布组装与落盘
+// 升级版：缝合怪大画布组装（完美适配高分屏 DPI/DPR 自动无损缩放）
 async function stitchAndSaveImage() {
   if (sessionChunks.length === 0 || !captureTabId) return;
 
+  // 1. 严格排序，确保切片按从上到下的顺序绘制
   sessionChunks.sort((a, b) => a.y - b.y);
 
   await chrome.scripting.executeScript({
     target: { tabId: captureTabId },
-    func: (chunks, maxHeight) => {
+    func: async (chunks, maxHeight) => {
+      // 2. 使用 Promise.all 并行预加载所有图片切片，获取其真实物理尺寸
+      const loadImagesPromises = chunks.map(chunk => {
+        return new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve({ ...chunk, imgElement: img });
+          img.src = chunk.dataUrl;
+        });
+      });
+
+      const loadedChunks = await Promise.all(loadImagesPromises);
+      if (loadedChunks.length === 0) return;
+
+      // 3. 【核心算法】：动态捕捉当前设备的真实屏幕缩放比 (DPR)
+      // 用图片的真实物理宽度除以浏览器的逻辑宽度，精准识别 1.25, 1.5, 2.0 等各种高分屏环境
+      const firstImg = loadedChunks[0].imgElement;
+      const dpr = firstImg.naturalWidth / window.innerWidth;
+
+      // 4. 初始化全高清物理像素画布（不再使用会引发裁剪的逻辑像素宽度）
       const cvs = document.createElement('canvas');
       const maxRelY = Math.max(...chunks.map(c => c.y));
       
-      cvs.width = window.innerWidth;
-      cvs.height = Math.min(maxRelY + window.innerHeight, maxHeight);
+      cvs.width = firstImg.naturalWidth; 
+      cvs.height = Math.min(maxRelY + window.innerHeight, maxHeight) * dpr;
       
       const ctx = cvs.getContext('2d');
+      
+      // 防黑条双保险：刷上一层纯白底漆
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, cvs.width, cvs.height);
       
-      let loaded = 0;
-      chunks.forEach(chunk => {
-        const img = new Image();
-        img.onload = () => {
-          try {
-            ctx.drawImage(img, 0, chunk.y);
-          } catch (e) {
-            console.error(e);
-          }
-          loaded++;
-          if (loaded === chunks.length) {
-            const dataUrl = cvs.toDataURL('image/png');
-            const link = document.createElement('a');
-            link.download = `clean-longshot-${Date.now()}.png`;
-            link.href = dataUrl;
-            link.click();
-          }
-        };
-        img.src = chunk.dataUrl;
+      // 5. 像素级无缝贴合绘制
+      loadedChunks.forEach(chunk => {
+        try {
+          // 【核心修正】：将逻辑层的滚动坐标 chunk.y 乘以 DPR，转换成物理层绝对坐标
+          // 彻底解决高分屏下的居中网页内容右移、左侧留白以及右侧裁剪问题
+          const physicalY = Math.round(chunk.y * dpr);
+          ctx.drawImage(chunk.imgElement, 0, physicalY);
+        } catch (e) {
+          console.error("Canvas drawing slice failed:", e);
+        }
       });
+
+      // 6. 导出超清无损长图并落盘
+      const dataUrl = cvs.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.download = `perfect-hd-longshot-${Date.now()}.png`;
+      link.href = dataUrl;
+      link.click();
     },
     args: [sessionChunks, MAX_HEIGHT]
   });
